@@ -5,87 +5,49 @@
 
 {% block content %}
 <div class="dashboard">
-    <section class="card">
-        <h2>Registrar Toma</h2>
-        <form method="POST" action="{{ url_for('add_feeding') }}" class="feeding-form">
-            <div class="form-row">
-                <div class="form-group">
-                    <label for="fed_at">Fecha y hora</label>
-                    <input type="datetime-local" id="fed_at" name="fed_at" required>
-                </div>
-                <div class="form-group">
-                    <label for="breast_side">Lado</label>
-                    <select id="breast_side" name="breast_side" required>
-                        <option value="izquierdo">Izquierdo</option>
-                        <option value="derecho">Derecho</option>
-                        <option value="ambos">Ambos</option>
-                        <option value="biberon">Biberón</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label for="duration_minutes">Duración (min)</label>
-                    <input type="number" id="duration_minutes" name="duration_minutes" min="1" max="120" required>
-                </div>
-            </div>
-            <div class="form-group">
-                <label for="notes">Notas (opcional)</label>
-                <input type="text" id="notes" name="notes" placeholder="Ej: se quedó dormido, buena succión...">
-            </div>
-            <button type="submit" class="btn btn-primary">Guardar Toma</button>
-        </form>
-    </section>
+    <h2 class="page-title">Resumen de {{ baby_name }}</h2>
+
+    <div class="summary-cards">
+        <div class="summary-card">
+            <span class="summary-value">{{ today['total_feedings'] }}</span>
+            <span class="summary-label">Tomas hoy</span>
+        </div>
+        <div class="summary-card">
+            <span class="summary-value">{{ "%.1f"|format(today['total_ounces']) }}</span>
+            <span class="summary-label">Onzas hoy</span>
+        </div>
+        <div class="summary-card">
+            <span class="summary-value">{{ today['total_minutes'] }}</span>
+            <span class="summary-label">Minutos hoy</span>
+        </div>
+    </div>
+
+    <div class="summary-cards">
+        <div class="summary-card total">
+            <span class="summary-value">{{ summary['total_feedings'] }}</span>
+            <span class="summary-label">Total tomas</span>
+        </div>
+        <div class="summary-card total">
+            <span class="summary-value">{{ "%.1f"|format(summary['total_ounces']) }}</span>
+            <span class="summary-label">Total onzas</span>
+        </div>
+        <div class="summary-card total">
+            <span class="summary-value">{{ summary['total_minutes'] }}</span>
+            <span class="summary-label">Total minutos</span>
+        </div>
+    </div>
 
     <section class="card">
-        <h2>Resumen Diario</h2>
+        <h2>Evolución Diaria</h2>
         <div class="chart-container">
             <canvas id="feedingChart"></canvas>
         </div>
-    </section>
-
-    <section class="card">
-        <h2>Últimas Tomas</h2>
-        {% if feedings %}
-        <div class="table-responsive">
-            <table>
-                <thead>
-                    <tr>
-                        <th>Fecha / Hora</th>
-                        <th>Lado</th>
-                        <th>Duración</th>
-                        <th>Notas</th>
-                        <th></th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for f in feedings %}
-                    <tr>
-                        <td>{{ f['fed_at'][:16].replace('T', ' ') }}</td>
-                        <td><span class="badge badge-{{ f['breast_side'] }}">{{ f['breast_side']|capitalize }}</span></td>
-                        <td>{{ f['duration_minutes'] }} min</td>
-                        <td>{{ f['notes'] or '—' }}</td>
-                        <td>
-                            <form method="POST" action="{{ url_for('delete_feeding', feeding_id=f['id']) }}" style="display:inline">
-                                <button type="submit" class="btn-delete" title="Eliminar">✕</button>
-                            </form>
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-        {% else %}
-        <p class="empty-state">Aún no hay tomas registradas. ¡Registra la primera!</p>
-        {% endif %}
     </section>
 </div>
 {% endblock %}
 
 {% block scripts %}
 <script>
-// Set default datetime to now
-document.getElementById('fed_at').value = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16);
-
-// Load chart
 fetch('/api/chart_data')
     .then(r => r.json())
     .then(data => {
@@ -100,6 +62,15 @@ fetch('/api/chart_data')
                         data: data.durations,
                         borderColor: '#6c5ce7',
                         backgroundColor: 'rgba(108,92,231,0.1)',
+                        fill: true,
+                        tension: 0.3,
+                        yAxisID: 'y'
+                    },
+                    {
+                        label: 'Onzas',
+                        data: data.ounces,
+                        borderColor: '#e17055',
+                        backgroundColor: 'rgba(225,112,85,0.1)',
                         fill: true,
                         tension: 0.3,
                         yAxisID: 'y'
@@ -126,7 +97,7 @@ fetch('/api/chart_data')
                     y: {
                         type: 'linear',
                         position: 'left',
-                        title: { display: true, text: 'Minutos' },
+                        title: { display: true, text: 'Minutos / Onzas' },
                         beginAtZero: true
                     },
                     y1: {

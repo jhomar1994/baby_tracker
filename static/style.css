@@ -30,18 +30,35 @@ nav {
 .nav-links {
     display: flex;
     align-items: center;
-    gap: 1.5rem;
+    gap: 1rem;
 }
 
 .nav-links a {
     color: white;
     text-decoration: none;
-    opacity: 0.9;
+    opacity: 0.8;
+    padding: 0.4rem 0.8rem;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    transition: opacity 0.2s, background 0.2s;
 }
 
 .nav-links a:hover {
     opacity: 1;
-    text-decoration: underline;
+    background: rgba(255,255,255,0.15);
+}
+
+.nav-links a.active {
+    opacity: 1;
+    background: rgba(255,255,255,0.25);
+    font-weight: 600;
+}
+
+.nav-logout {
+    opacity: 0.7 !important;
+    border-left: 1px solid rgba(255,255,255,0.3);
+    padding-left: 1rem !important;
+    margin-left: 0.5rem;
 }
 
 /* Main */
@@ -49,6 +66,13 @@ main {
     max-width: 900px;
     margin: 0 auto;
     padding: 2rem 1rem;
+}
+
+/* Page title */
+.page-title {
+    font-size: 1.4rem;
+    margin-bottom: 1.5rem;
+    color: #2d3436;
 }
 
 /* Flash messages */
@@ -121,6 +145,25 @@ main {
     text-decoration: underline;
 }
 
+/* Checkbox */
+.checkbox-group {
+    text-align: left;
+}
+
+.checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    cursor: pointer;
+    font-size: 0.9rem;
+    color: #636e72;
+}
+
+.checkbox-label input[type="checkbox"] {
+    width: auto;
+    accent-color: #6c5ce7;
+}
+
 /* Forms */
 .form-group {
     margin-bottom: 1rem;
@@ -153,11 +196,17 @@ main {
 
 .form-row {
     display: grid;
-    grid-template-columns: 1fr 1fr 1fr;
+    grid-template-columns: 1fr 1fr 1fr 1fr;
     gap: 1rem;
 }
 
-@media (max-width: 600px) {
+@media (max-width: 700px) {
+    .form-row {
+        grid-template-columns: 1fr 1fr;
+    }
+}
+
+@media (max-width: 450px) {
     .form-row {
         grid-template-columns: 1fr;
     }
@@ -202,6 +251,51 @@ main {
 
 .btn-delete:hover {
     background: #ffeaa7;
+}
+
+/* Summary Cards */
+.summary-cards {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+}
+
+.summary-card {
+    background: white;
+    border-radius: 12px;
+    padding: 1.2rem;
+    text-align: center;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+    border-top: 4px solid #6c5ce7;
+}
+
+.summary-card.total {
+    border-top-color: #00b894;
+}
+
+.summary-value {
+    display: block;
+    font-size: 2rem;
+    font-weight: 700;
+    color: #2d3436;
+    line-height: 1.2;
+}
+
+.summary-label {
+    display: block;
+    font-size: 0.8rem;
+    color: #636e72;
+    margin-top: 0.3rem;
+    text-transform: uppercase;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+}
+
+@media (max-width: 500px) {
+    .summary-cards {
+        grid-template-columns: 1fr;
+    }
 }
 
 /* Cards */
@@ -288,4 +382,16 @@ tbody tr:hover {
     color: #b2bec3;
     padding: 2rem;
     font-size: 0.95rem;
+}
+
+/* Responsive nav */
+@media (max-width: 600px) {
+    nav {
+        flex-direction: column;
+        gap: 0.75rem;
+        padding: 1rem;
+    }
+    .nav-links {
+        gap: 0.5rem;
+    }
 }

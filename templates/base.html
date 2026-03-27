@@ -3,17 +3,18 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🍼 Baby Tracker</title>
+    <title>Baby Tracker</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     {% block head %}{% endblock %}
 </head>
 <body>
     {% if session.get('user_id') %}
     <nav>
-        <div class="nav-brand">🍼 Baby Tracker — {{ session.get('baby_name', 'Bebé') }}</div>
+        <div class="nav-brand">Baby Tracker - {{ session.get('baby_name', 'Bebé') }}</div>
         <div class="nav-links">
-            <span>Hola, {{ session.get('username') }}</span>
-            <a href="{{ url_for('logout') }}">Cerrar sesión</a>
+            <a href="{{ url_for('record') }}" class="{{ 'active' if request.endpoint == 'record' }}">Registrar Toma</a>
+            <a href="{{ url_for('dashboard') }}" class="{{ 'active' if request.endpoint == 'dashboard' }}">Resumen</a>
+            <a href="{{ url_for('logout') }}" class="nav-logout">Salir</a>
         </div>
     </nav>
     {% endif %}

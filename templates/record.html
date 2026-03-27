@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="dashboard">
+    <section class="card">
+        <h2>Registrar Toma</h2>
+        <form method="POST" action="{{ url_for('add_feeding') }}" class="feeding-form">
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="fed_at">Fecha y hora</label>
+                    <input type="datetime-local" id="fed_at" name="fed_at" required>
+                </div>
+                <div class="form-group">
+                    <label for="breast_side">Lado</label>
+                    <select id="breast_side" name="breast_side" required>
+                        <option value="izquierdo">Izquierdo</option>
+                        <option value="derecho">Derecho</option>
+                        <option value="ambos">Ambos</option>
+                        <option value="biberon">Biberón</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="duration_minutes">Duración (min)</label>
+                    <input type="number" id="duration_minutes" name="duration_minutes" min="1" max="120" required>
+                </div>
+                <div class="form-group">
+                    <label for="ounces">Onzas (oz)</label>
+                    <input type="number" id="ounces" name="ounces" min="0" max="20" step="0.5" placeholder="0">
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="notes">Notas (opcional)</label>
+                <input type="text" id="notes" name="notes" placeholder="Ej: se quedó dormido, buena succión...">
+            </div>
+            <button type="submit" class="btn btn-primary">Guardar Toma</button>
+        </form>
+    </section>
+
+    <section class="card">
+        <h2>Últimas Tomas</h2>
+        {% if feedings %}
+        <div class="table-responsive">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Fecha / Hora</th>
+                        <th>Lado</th>
+                        <th>Duración</th>
+                        <th>Onzas</th>
+                        <th>Notas</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for f in feedings %}
+                    <tr>
+                        <td>{{ f['fed_at'][:16].replace('T', ' ') }}</td>
+                        <td><span class="badge badge-{{ f['breast_side'] }}">{{ f['breast_side']|capitalize }}</span></td>
+                        <td>{{ f['duration_minutes'] }} min</td>
+                        <td>{{ f['ounces'] }} oz</td>
+                        <td>{{ f['notes'] or '—' }}</td>
+                        <td>
+                            <form method="POST" action="{{ url_for('delete_feeding', feeding_id=f['id']) }}" style="display:inline">
+                                <button type="submit" class="btn-delete" title="Eliminar">✕</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="empty-state">Aún no hay tomas registradas. ¡Registra la primera!</p>
+        {% endif %}
+    </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.getElementById('fed_at').value = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+</script>
+{% endblock %}

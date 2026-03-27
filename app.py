@@ -1,9 +1,9 @@
 from flask import Flask, render_template, request, redirect, url_for, session, jsonify, flash
 from werkzeug.security import generate_password_hash, check_password_hash
 from functools import wraps
+from datetime import timedelta
 import sqlite3
 import os
-from datetime import datetime
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-key-change-me")
@@ -31,6 +31,7 @@ def init_db():
             user_id INTEGER NOT NULL,
             breast_side TEXT NOT NULL,
             duration_minutes INTEGER NOT NULL,
+            ounces REAL DEFAULT 0,
             notes TEXT,
             fed_at TIMESTAMP NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -90,12 +91,16 @@ def login():
     if request.method == "POST":
         username = request.form["username"].strip()
         password = request.form["password"]
+        remember = request.form.get("remember")
 
         conn = get_db()
         user = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
         conn.close()
 
         if user and check_password_hash(user["password"], password):
+            session.permanent = bool(remember)
+            if remember:
+                app.permanent_session_lifetime = timedelta(days=30)
             session["user_id"] = user["id"]
             session["username"] = user["username"]
             session["baby_name"] = user["baby_name"]
@@ -116,12 +121,39 @@ def logout():
 @login_required
 def dashboard():
     conn = get_db()
+    summary = conn.execute(
+        """SELECT COUNT(*) as total_feedings,
+                  COALESCE(SUM(ounces), 0) as total_ounces,
+                  COALESCE(SUM(duration_minutes), 0) as total_minutes
+           FROM feedings WHERE user_id = ?""",
+        (session["user_id"],),
+    ).fetchone()
+    today_summary = conn.execute(
+        """SELECT COUNT(*) as total_feedings,
+                  COALESCE(SUM(ounces), 0) as total_ounces,
+                  COALESCE(SUM(duration_minutes), 0) as total_minutes
+           FROM feedings WHERE user_id = ? AND date(fed_at) = date('now')""",
+        (session["user_id"],),
+    ).fetchone()
+    conn.close()
+    return render_template(
+        "dashboard.html",
+        baby_name=session.get("baby_name", "Bebé"),
+        summary=summary,
+        today=today_summary,
+    )
+
+
+@app.route("/record")
+@login_required
+def record():
+    conn = get_db()
     feedings = conn.execute(
         "SELECT * FROM feedings WHERE user_id = ? ORDER BY fed_at DESC LIMIT 50",
         (session["user_id"],),
     ).fetchall()
     conn.close()
-    return render_template("dashboard.html", feedings=feedings, baby_name=session.get("baby_name", "Bebé"))
+    return render_template("record.html", feedings=feedings, baby_name=session.get("baby_name", "Bebé"))
 
 
 @app.route("/add_feeding", methods=["POST"])
@@ -129,18 +161,19 @@ def dashboard():
 def add_feeding():
     breast_side = request.form["breast_side"]
     duration = int(request.form["duration_minutes"])
+    ounces = float(request.form.get("ounces", 0) or 0)
     notes = request.form.get("notes", "").strip()
     fed_at = request.form["fed_at"]
 
     conn = get_db()
     conn.execute(
-        "INSERT INTO feedings (user_id, breast_side, duration_minutes, notes, fed_at) VALUES (?, ?, ?, ?, ?)",
-        (session["user_id"], breast_side, duration, notes, fed_at),
+        "INSERT INTO feedings (user_id, breast_side, duration_minutes, ounces, notes, fed_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (session["user_id"], breast_side, duration, ounces, notes, fed_at),
     )
     conn.commit()
     conn.close()
     flash("Toma registrada correctamente.", "success")
-    return redirect(url_for("dashboard"))
+    return redirect(url_for("record"))
 
 
 @app.route("/delete_feeding/<int:feeding_id>", methods=["POST"])
@@ -150,7 +183,7 @@ def delete_feeding(feeding_id):
     conn.execute("DELETE FROM feedings WHERE id = ? AND user_id = ?", (feeding_id, session["user_id"]))
     conn.commit()
     conn.close()
-    return redirect(url_for("dashboard"))
+    return redirect(url_for("record"))
 
 
 @app.route("/api/chart_data")
@@ -158,7 +191,10 @@ def delete_feeding(feeding_id):
 def chart_data():
     conn = get_db()
     rows = conn.execute(
-        """SELECT date(fed_at) as day, SUM(duration_minutes) as total_min, COUNT(*) as count
+        """SELECT date(fed_at) as day,
+                  SUM(duration_minutes) as total_min,
+                  COUNT(*) as count,
+                  COALESCE(SUM(ounces), 0) as total_oz
            FROM feedings WHERE user_id = ?
            GROUP BY date(fed_at) ORDER BY day""",
         (session["user_id"],),
@@ -169,6 +205,7 @@ def chart_data():
         "labels": [r["day"] for r in rows],
         "durations": [r["total_min"] for r in rows],
         "counts": [r["count"] for r in rows],
+        "ounces": [r["total_oz"] for r in rows],
     }
     return jsonify(data)
 
