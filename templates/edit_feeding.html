@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="dashboard">
+    <section class="card">
+        <h2>Editar Toma</h2>
+        <form method="POST" class="feeding-form">
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="fed_at">Fecha y hora</label>
+                    <input type="datetime-local" id="fed_at" name="fed_at" value="{{ feeding['fed_at'][:16] }}" required>
+                </div>
+                <div class="form-group">
+                    <label for="breast_side">Lado</label>
+                    <select id="breast_side" name="breast_side" required>
+                        <option value="izquierdo" {{ 'selected' if feeding['breast_side'] == 'izquierdo' }}>Izquierdo</option>
+                        <option value="derecho" {{ 'selected' if feeding['breast_side'] == 'derecho' }}>Derecho</option>
+                        <option value="ambos" {{ 'selected' if feeding['breast_side'] == 'ambos' }}>Ambos</option>
+                        <option value="biberon" {{ 'selected' if feeding['breast_side'] == 'biberon' }}>Biberón</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="duration_minutes">Duración (min)</label>
+                    <input type="number" id="duration_minutes" name="duration_minutes" value="{{ feeding['duration_minutes'] }}" min="1" max="120" required>
+                </div>
+                <div class="form-group">
+                    <label for="ounces">Onzas (oz)</label>
+                    <input type="number" id="ounces" name="ounces" value="{{ feeding['ounces'] }}" min="0" max="20" step="0.5">
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="notes">Notas (opcional)</label>
+                <input type="text" id="notes" name="notes" value="{{ feeding['notes'] or '' }}">
+            </div>
+            <div class="edit-actions">
+                <button type="submit" class="btn btn-primary">Guardar Cambios</button>
+                <a href="{{ url_for('record') }}" class="btn btn-cancel">Cancelar</a>
+            </div>
+        </form>
+    </section>
+</div>
+{% endblock %}

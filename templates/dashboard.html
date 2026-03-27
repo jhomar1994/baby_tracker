@@ -7,6 +7,13 @@
 <div class="dashboard">
     <h2 class="page-title">Resumen de {{ baby_name }}</h2>
 
+    {% if elapsed %}
+    <div class="last-feeding-banner">
+        Última toma hace <strong>{{ elapsed }}</strong>
+        — {{ last_feeding['breast_side']|capitalize }}, {{ last_feeding['duration_minutes'] }} min, {{ last_feeding['ounces'] }} oz
+    </div>
+    {% endif %}
+
     <div class="summary-cards">
         <div class="summary-card">
             <span class="summary-value">{{ today['total_feedings'] }}</span>
@@ -37,20 +44,80 @@
         </div>
     </div>
 
+    <!-- Date filter -->
+    <section class="card">
+        <h2>Filtrar por fecha</h2>
+        <form method="GET" class="filter-form">
+            <div class="filter-row">
+                <div class="form-group">
+                    <label for="date_from">Desde</label>
+                    <input type="date" id="date_from" name="date_from" value="{{ date_from }}">
+                </div>
+                <div class="form-group">
+                    <label for="date_to">Hasta</label>
+                    <input type="date" id="date_to" name="date_to" value="{{ date_to }}">
+                </div>
+                <div class="filter-actions">
+                    <button type="submit" class="btn btn-filter">Filtrar</button>
+                    {% if date_from or date_to %}
+                    <a href="{{ url_for('dashboard') }}" class="btn btn-clear">Limpiar</a>
+                    {% endif %}
+                </div>
+            </div>
+        </form>
+
+        {% if filtered %}
+        <div class="summary-cards" style="margin-top: 1rem;">
+            <div class="summary-card filtered">
+                <span class="summary-value">{{ filtered['total_feedings'] }}</span>
+                <span class="summary-label">Tomas (rango)</span>
+            </div>
+            <div class="summary-card filtered">
+                <span class="summary-value">{{ "%.1f"|format(filtered['total_ounces']) }}</span>
+                <span class="summary-label">Onzas (rango)</span>
+            </div>
+            <div class="summary-card filtered">
+                <span class="summary-value">{{ filtered['total_minutes'] }}</span>
+                <span class="summary-label">Minutos (rango)</span>
+            </div>
+        </div>
+        {% endif %}
+    </section>
+
+    <!-- Line chart -->
     <section class="card">
         <h2>Evolución Diaria</h2>
         <div class="chart-container">
             <canvas id="feedingChart"></canvas>
         </div>
     </section>
+
+    <!-- Bar chart by side -->
+    {% if sides %}
+    <section class="card">
+        <h2>Distribución por Lado</h2>
+        <div class="chart-container" style="height: 200px;">
+            <canvas id="sideChart"></canvas>
+        </div>
+    </section>
+    {% endif %}
 </div>
 {% endblock %}
 
 {% block scripts %}
 <script>
-fetch('/api/chart_data')
+const dateFrom = '{{ date_from }}';
+const dateTo = '{{ date_to }}';
+let chartUrl = '/api/chart_data';
+if (dateFrom && dateTo) {
+    chartUrl += `?date_from=${dateFrom}&date_to=${dateTo}`;
+}
+
+fetch(chartUrl)
     .then(r => r.json())
     .then(data => {
+        const isDark = document.body.classList.contains('dark');
+        const gridColor = isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)';
         const ctx = document.getElementById('feedingChart').getContext('2d');
         new Chart(ctx, {
             type: 'line',
@@ -62,54 +129,65 @@ fetch('/api/chart_data')
                         data: data.durations,
                         borderColor: '#6c5ce7',
                         backgroundColor: 'rgba(108,92,231,0.1)',
-                        fill: true,
-                        tension: 0.3,
-                        yAxisID: 'y'
+                        fill: true, tension: 0.3, yAxisID: 'y'
                     },
                     {
                         label: 'Onzas',
                         data: data.ounces,
                         borderColor: '#e17055',
                         backgroundColor: 'rgba(225,112,85,0.1)',
-                        fill: true,
-                        tension: 0.3,
-                        yAxisID: 'y'
+                        fill: true, tension: 0.3, yAxisID: 'y'
                     },
                     {
                         label: 'Número de tomas',
                         data: data.counts,
                         borderColor: '#00b894',
                         backgroundColor: 'rgba(0,184,148,0.1)',
-                        fill: true,
-                        tension: 0.3,
-                        yAxisID: 'y1'
+                        fill: true, tension: 0.3, yAxisID: 'y1'
                     }
                 ]
             },
             options: {
-                responsive: true,
-                maintainAspectRatio: false,
+                responsive: true, maintainAspectRatio: false,
                 interaction: { mode: 'index', intersect: false },
-                plugins: {
-                    legend: { position: 'top' }
-                },
+                plugins: { legend: { position: 'top' } },
                 scales: {
-                    y: {
-                        type: 'linear',
-                        position: 'left',
-                        title: { display: true, text: 'Minutos / Onzas' },
-                        beginAtZero: true
-                    },
-                    y1: {
-                        type: 'linear',
-                        position: 'right',
-                        title: { display: true, text: 'Tomas' },
-                        beginAtZero: true,
-                        grid: { drawOnChartArea: false }
-                    }
+                    y: { type: 'linear', position: 'left', title: { display: true, text: 'Minutos / Onzas' }, beginAtZero: true },
+                    y1: { type: 'linear', position: 'right', title: { display: true, text: 'Tomas' }, beginAtZero: true, grid: { drawOnChartArea: false } }
                 }
             }
         });
     });
+
+// Side distribution chart
+const sidesData = {{ sides|tojson }};
+if (Object.keys(sidesData).length > 0) {
+    const sideColors = {
+        'izquierdo': '#dfe6e9', 'derecho': '#ffeaa7',
+        'ambos': '#81ecec', 'biberon': '#fab1a0'
+    };
+    const labels = Object.keys(sidesData).map(s => s.charAt(0).toUpperCase() + s.slice(1));
+    const values = Object.values(sidesData);
+    const colors = Object.keys(sidesData).map(s => sideColors[s] || '#b2bec3');
+
+    new Chart(document.getElementById('sideChart').getContext('2d'), {
+        type: 'bar',
+        data: {
+            labels: labels,
+            datasets: [{
+                label: 'Tomas por lado',
+                data: values,
+                backgroundColor: colors,
+                borderColor: colors.map(c => c),
+                borderWidth: 1
+            }]
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } }
+        }
+    });
+}
 </script>
 {% endblock %}

@@ -3,11 +3,14 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from functools import wraps
 from datetime import timedelta, datetime
 import sqlite3
+import json
+import urllib.request
 import os
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-key-change-me")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+ALERT_HOURS = 3  # hours before sending Telegram reminder
 DB_PATH = os.path.join(os.path.dirname(__file__), "baby_tracker.db")
 
 
@@ -42,6 +45,8 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             telegram_id INTEGER UNIQUE NOT NULL,
             user_id INTEGER NOT NULL,
+            alert_enabled INTEGER DEFAULT 1,
+            last_alert_at TIMESTAMP,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (user_id) REFERENCES users(id)
         );
@@ -125,10 +130,43 @@ def logout():
     return redirect(url_for("login"))
 
 
+def get_last_feeding(conn, user_id):
+    """Get the last feeding and time elapsed."""
+    last = conn.execute(
+        "SELECT * FROM feedings WHERE user_id = ? ORDER BY fed_at DESC LIMIT 1",
+        (user_id,),
+    ).fetchone()
+    if not last:
+        return None, None
+    try:
+        fed_time = datetime.strptime(last["fed_at"][:16], "%Y-%m-%dT%H:%M")
+    except ValueError:
+        fed_time = datetime.strptime(last["fed_at"][:16], "%Y-%m-%d %H:%M")
+    elapsed = datetime.now() - fed_time
+    hours = int(elapsed.total_seconds() // 3600)
+    minutes = int((elapsed.total_seconds() % 3600) // 60)
+    return last, f"{hours}h {minutes}min"
+
+
 @app.route("/dashboard")
 @login_required
 def dashboard():
     conn = get_db()
+    date_from = request.args.get("date_from", "")
+    date_to = request.args.get("date_to", "")
+
+    # Summary with optional date filter
+    if date_from and date_to:
+        filtered = conn.execute(
+            """SELECT COUNT(*) as total_feedings,
+                      COALESCE(SUM(ounces), 0) as total_ounces,
+                      COALESCE(SUM(duration_minutes), 0) as total_minutes
+               FROM feedings WHERE user_id = ? AND date(fed_at) BETWEEN ? AND ?""",
+            (session["user_id"], date_from, date_to),
+        ).fetchone()
+    else:
+        filtered = None
+
     summary = conn.execute(
         """SELECT COUNT(*) as total_feedings,
                   COALESCE(SUM(ounces), 0) as total_ounces,
@@ -140,15 +178,32 @@ def dashboard():
         """SELECT COUNT(*) as total_feedings,
                   COALESCE(SUM(ounces), 0) as total_ounces,
                   COALESCE(SUM(duration_minutes), 0) as total_minutes
-           FROM feedings WHERE user_id = ? AND date(fed_at) = date('now')""",
+           FROM feedings WHERE user_id = ? AND date(fed_at) = date('now', 'localtime')""",
         (session["user_id"],),
     ).fetchone()
+
+    last_feeding, elapsed = get_last_feeding(conn, session["user_id"])
+
+    # Side distribution for bar chart
+    sides = conn.execute(
+        """SELECT breast_side, COUNT(*) as count
+           FROM feedings WHERE user_id = ?
+           GROUP BY breast_side""",
+        (session["user_id"],),
+    ).fetchall()
+
     conn.close()
     return render_template(
         "dashboard.html",
         baby_name=session.get("baby_name", "Bebé"),
         summary=summary,
         today=today_summary,
+        filtered=filtered,
+        date_from=date_from,
+        date_to=date_to,
+        last_feeding=last_feeding,
+        elapsed=elapsed,
+        sides={r["breast_side"]: r["count"] for r in sides},
     )
 
 
@@ -160,8 +215,10 @@ def record():
         "SELECT * FROM feedings WHERE user_id = ? ORDER BY fed_at DESC LIMIT 50",
         (session["user_id"],),
     ).fetchall()
+    last_feeding, elapsed = get_last_feeding(conn, session["user_id"])
     conn.close()
-    return render_template("record.html", feedings=feedings, baby_name=session.get("baby_name", "Bebé"))
+    return render_template("record.html", feedings=feedings, baby_name=session.get("baby_name", "Bebé"),
+                           last_feeding=last_feeding, elapsed=elapsed)
 
 
 @app.route("/add_feeding", methods=["POST"])
@@ -184,6 +241,41 @@ def add_feeding():
     return redirect(url_for("record"))
 
 
+@app.route("/edit_feeding/<int:feeding_id>", methods=["GET", "POST"])
+@login_required
+def edit_feeding(feeding_id):
+    conn = get_db()
+    feeding = conn.execute(
+        "SELECT * FROM feedings WHERE id = ? AND user_id = ?",
+        (feeding_id, session["user_id"]),
+    ).fetchone()
+
+    if not feeding:
+        conn.close()
+        flash("Toma no encontrada.", "error")
+        return redirect(url_for("record"))
+
+    if request.method == "POST":
+        breast_side = request.form["breast_side"]
+        duration = int(request.form["duration_minutes"])
+        ounces = float(request.form.get("ounces", 0) or 0)
+        notes = request.form.get("notes", "").strip()
+        fed_at = request.form["fed_at"]
+
+        conn.execute(
+            """UPDATE feedings SET breast_side=?, duration_minutes=?, ounces=?, notes=?, fed_at=?
+               WHERE id=? AND user_id=?""",
+            (breast_side, duration, ounces, notes, fed_at, feeding_id, session["user_id"]),
+        )
+        conn.commit()
+        conn.close()
+        flash("Toma actualizada.", "success")
+        return redirect(url_for("record"))
+
+    conn.close()
+    return render_template("edit_feeding.html", feeding=feeding)
+
+
 @app.route("/delete_feeding/<int:feeding_id>", methods=["POST"])
 @login_required
 def delete_feeding(feeding_id):
@@ -197,16 +289,30 @@ def delete_feeding(feeding_id):
 @app.route("/api/chart_data")
 @login_required
 def chart_data():
+    date_from = request.args.get("date_from", "")
+    date_to = request.args.get("date_to", "")
     conn = get_db()
-    rows = conn.execute(
-        """SELECT date(fed_at) as day,
-                  SUM(duration_minutes) as total_min,
-                  COUNT(*) as count,
-                  COALESCE(SUM(ounces), 0) as total_oz
-           FROM feedings WHERE user_id = ?
-           GROUP BY date(fed_at) ORDER BY day""",
-        (session["user_id"],),
-    ).fetchall()
+
+    if date_from and date_to:
+        rows = conn.execute(
+            """SELECT date(fed_at) as day,
+                      SUM(duration_minutes) as total_min,
+                      COUNT(*) as count,
+                      COALESCE(SUM(ounces), 0) as total_oz
+               FROM feedings WHERE user_id = ? AND date(fed_at) BETWEEN ? AND ?
+               GROUP BY date(fed_at) ORDER BY day""",
+            (session["user_id"], date_from, date_to),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """SELECT date(fed_at) as day,
+                      SUM(duration_minutes) as total_min,
+                      COUNT(*) as count,
+                      COALESCE(SUM(ounces), 0) as total_oz
+               FROM feedings WHERE user_id = ?
+               GROUP BY date(fed_at) ORDER BY day""",
+            (session["user_id"],),
+        ).fetchall()
     conn.close()
 
     data = {
@@ -218,11 +324,29 @@ def chart_data():
     return jsonify(data)
 
 
+# --- PWA ---
+@app.route("/manifest.json")
+def manifest():
+    return jsonify({
+        "name": "Baby Tracker",
+        "short_name": "BabyTracker",
+        "start_url": "/",
+        "display": "standalone",
+        "background_color": "#f0f2f5",
+        "theme_color": "#6c5ce7",
+        "icons": [
+            {"src": "/static/icon-192.png", "sizes": "192x192", "type": "image/png"},
+            {"src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png"},
+        ]
+    })
+
+
+@app.route("/sw.js")
+def service_worker():
+    return app.send_static_file("sw.js"), 200, {"Content-Type": "application/javascript"}
+
+
 ## --- Telegram Bot Webhook --- ##
-
-import json
-import urllib.request
-
 
 def telegram_send(chat_id, text):
     """Send a message via Telegram Bot API."""
@@ -251,7 +375,9 @@ def handle_telegram_message(chat_id, text):
                 "<code>/toma minutos onzas lado</code>\n\n"
                 "Lados: izquierdo, derecho, ambos, biberon\n\n"
                 "Ver resumen del día:\n"
-                "<code>/resumen</code>"
+                "<code>/resumen</code>\n\n"
+                "Activar/desactivar alertas:\n"
+                "<code>/alerta on</code> o <code>/alerta off</code>"
             ))
             conn.close()
             return
@@ -262,11 +388,11 @@ def handle_telegram_message(chat_id, text):
 
         if user and check_password_hash(user["password"], password):
             conn.execute(
-                "INSERT OR REPLACE INTO telegram_links (telegram_id, user_id) VALUES (?, ?)",
+                "INSERT OR REPLACE INTO telegram_links (telegram_id, user_id, alert_enabled) VALUES (?, ?, 1)",
                 (chat_id, user["id"]),
             )
             conn.commit()
-            telegram_send(chat_id, f"Vinculado a la cuenta de <b>{username}</b>. Ya puedes registrar tomas.")
+            telegram_send(chat_id, f"Vinculado a la cuenta de <b>{username}</b>. Ya puedes registrar tomas.\nAlertas activadas (cada {ALERT_HOURS}h sin toma).")
         else:
             telegram_send(chat_id, "Usuario o contraseña incorrectos.")
         conn.close()
@@ -280,6 +406,20 @@ def handle_telegram_message(chat_id, text):
         return
 
     user_id = link["user_id"]
+
+    # /alerta on|off
+    if command == "/alerta":
+        if len(parts) < 2 or parts[1].lower() not in ("on", "off"):
+            telegram_send(chat_id, "Uso: <code>/alerta on</code> o <code>/alerta off</code>")
+            conn.close()
+            return
+        enabled = 1 if parts[1].lower() == "on" else 0
+        conn.execute("UPDATE telegram_links SET alert_enabled = ? WHERE telegram_id = ?", (enabled, chat_id))
+        conn.commit()
+        status = "activadas" if enabled else "desactivadas"
+        telegram_send(chat_id, f"Alertas {status}.")
+        conn.close()
+        return
 
     # /toma minutos onzas [lado] [nota...]
     if command == "/toma":
@@ -309,7 +449,6 @@ def handle_telegram_message(chat_id, text):
         )
         conn.commit()
 
-        # Get today's summary
         today = conn.execute(
             """SELECT COUNT(*) as c, COALESCE(SUM(ounces),0) as oz, COALESCE(SUM(duration_minutes),0) as mins
                FROM feedings WHERE user_id = ? AND date(fed_at) = date('now')""",
@@ -364,12 +503,13 @@ def handle_telegram_message(chat_id, text):
         "Comandos disponibles:\n"
         "<code>/toma minutos onzas [lado] [nota]</code>\n"
         "<code>/resumen</code>\n"
+        "<code>/alerta on|off</code>\n"
         "<code>/start usuario contraseña</code>"
     ))
     conn.close()
 
 
-@app.route(f"/webhook/telegram", methods=["POST"])
+@app.route("/webhook/telegram", methods=["POST"])
 def telegram_webhook():
     data = request.get_json(silent=True)
     if not data or "message" not in data:
@@ -383,6 +523,61 @@ def telegram_webhook():
         handle_telegram_message(chat_id, text)
 
     return jsonify({"ok": True})
+
+
+# --- Alert check endpoint (called by PythonAnywhere scheduled task) ---
+@app.route("/api/check_alerts")
+def check_alerts():
+    """Check all linked Telegram users and send alert if no feeding in ALERT_HOURS."""
+    if not TELEGRAM_BOT_TOKEN:
+        return jsonify({"ok": False, "reason": "no token"})
+
+    conn = get_db()
+    links = conn.execute(
+        "SELECT telegram_id, user_id, last_alert_at FROM telegram_links WHERE alert_enabled = 1"
+    ).fetchall()
+
+    now = datetime.now()
+    alerts_sent = 0
+
+    for link in links:
+        last = conn.execute(
+            "SELECT fed_at FROM feedings WHERE user_id = ? ORDER BY fed_at DESC LIMIT 1",
+            (link["user_id"],),
+        ).fetchone()
+
+        if not last:
+            continue
+
+        try:
+            fed_time = datetime.strptime(last["fed_at"][:16], "%Y-%m-%dT%H:%M")
+        except ValueError:
+            fed_time = datetime.strptime(last["fed_at"][:16], "%Y-%m-%d %H:%M")
+
+        hours_since = (now - fed_time).total_seconds() / 3600
+
+        if hours_since >= ALERT_HOURS:
+            # Don't send more than once per hour
+            if link["last_alert_at"]:
+                try:
+                    last_alert = datetime.strptime(link["last_alert_at"][:19], "%Y-%m-%d %H:%M:%S")
+                    if (now - last_alert).total_seconds() < 3600:
+                        continue
+                except ValueError:
+                    pass
+
+            h = int(hours_since)
+            m = int((hours_since % 1) * 60)
+            telegram_send(link["telegram_id"], f"Han pasado <b>{h}h {m}min</b> desde la última toma. Es hora de alimentar al bebé.")
+            conn.execute(
+                "UPDATE telegram_links SET last_alert_at = ? WHERE telegram_id = ?",
+                (now.strftime("%Y-%m-%d %H:%M:%S"), link["telegram_id"]),
+            )
+            alerts_sent += 1
+
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True, "alerts_sent": alerts_sent})
 
 
 init_db()

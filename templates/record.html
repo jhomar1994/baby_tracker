@@ -1,8 +1,66 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="dashboard">
+    {% if elapsed %}
+    <div class="last-feeding-banner">
+        Última toma hace <strong>{{ elapsed }}</strong>
+        — {{ last_feeding['breast_side']|capitalize }}, {{ last_feeding['duration_minutes'] }} min, {{ last_feeding['ounces'] }} oz
+    </div>
+    {% endif %}
+
+    <!-- Quick feeding buttons -->
     <section class="card">
-        <h2>Registrar Toma</h2>
+        <h2>Toma Rápida</h2>
+        <p class="quick-hint">Registra con un solo toque (usa la hora actual)</p>
+        <div class="quick-buttons">
+            <form method="POST" action="{{ url_for('add_feeding') }}" style="display:inline">
+                <input type="hidden" name="fed_at" class="quick-fed-at">
+                <input type="hidden" name="breast_side" value="izquierdo">
+                <input type="hidden" name="duration_minutes" value="15">
+                <input type="hidden" name="ounces" value="2">
+                <button type="submit" class="btn btn-quick izq">Izq 15min 2oz</button>
+            </form>
+            <form method="POST" action="{{ url_for('add_feeding') }}" style="display:inline">
+                <input type="hidden" name="fed_at" class="quick-fed-at">
+                <input type="hidden" name="breast_side" value="derecho">
+                <input type="hidden" name="duration_minutes" value="15">
+                <input type="hidden" name="ounces" value="2">
+                <button type="submit" class="btn btn-quick der">Der 15min 2oz</button>
+            </form>
+            <form method="POST" action="{{ url_for('add_feeding') }}" style="display:inline">
+                <input type="hidden" name="fed_at" class="quick-fed-at">
+                <input type="hidden" name="breast_side" value="ambos">
+                <input type="hidden" name="duration_minutes" value="20">
+                <input type="hidden" name="ounces" value="3">
+                <button type="submit" class="btn btn-quick amb">Ambos 20min 3oz</button>
+            </form>
+            <form method="POST" action="{{ url_for('add_feeding') }}" style="display:inline">
+                <input type="hidden" name="fed_at" class="quick-fed-at">
+                <input type="hidden" name="breast_side" value="biberon">
+                <input type="hidden" name="duration_minutes" value="10">
+                <input type="hidden" name="ounces" value="4">
+                <button type="submit" class="btn btn-quick bib">Biberón 10min 4oz</button>
+            </form>
+        </div>
+    </section>
+
+    <!-- Timer -->
+    <section class="card">
+        <h2>Temporizador</h2>
+        <div class="timer-section">
+            <div class="timer-display" id="timerDisplay">00:00</div>
+            <div class="timer-buttons">
+                <button type="button" class="btn btn-timer-start" id="timerStart" onclick="startTimer()">Iniciar</button>
+                <button type="button" class="btn btn-timer-stop" id="timerStop" onclick="stopTimer()" style="display:none">Detener</button>
+                <button type="button" class="btn btn-timer-reset" id="timerReset" onclick="resetTimer()" style="display:none">Reiniciar</button>
+            </div>
+            <p class="timer-hint" id="timerHint" style="display:none">El tiempo se llenará automáticamente en el formulario</p>
+        </div>
+    </section>
+
+    <!-- Manual form -->
+    <section class="card">
+        <h2>Registrar Toma Manual</h2>
         <form method="POST" action="{{ url_for('add_feeding') }}" class="feeding-form">
             <div class="form-row">
                 <div class="form-group">
@@ -58,7 +116,8 @@
                         <td>{{ f['duration_minutes'] }} min</td>
                         <td>{{ f['ounces'] }} oz</td>
                         <td>{{ f['notes'] or '—' }}</td>
-                        <td>
+                        <td class="actions-cell">
+                            <a href="{{ url_for('edit_feeding', feeding_id=f['id']) }}" class="btn-edit" title="Editar">E</a>
                             <form method="POST" action="{{ url_for('delete_feeding', feeding_id=f['id']) }}" style="display:inline">
                                 <button type="submit" class="btn-delete" title="Eliminar">✕</button>
                             </form>
@@ -77,6 +136,49 @@
 
 {% block scripts %}
 <script>
+// Set default datetime
 document.getElementById('fed_at').value = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+
+// Set quick feeding datetime
+document.querySelectorAll('.quick-fed-at').forEach(el => {
+    el.value = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+});
+
+// Timer
+let timerInterval = null;
+let timerSeconds = 0;
+
+function startTimer() {
+    document.getElementById('timerStart').style.display = 'none';
+    document.getElementById('timerStop').style.display = 'inline-block';
+    document.getElementById('timerReset').style.display = 'none';
+    document.getElementById('timerHint').style.display = 'block';
+    timerInterval = setInterval(() => {
+        timerSeconds++;
+        const m = Math.floor(timerSeconds / 60);
+        const s = timerSeconds % 60;
+        document.getElementById('timerDisplay').textContent =
+            String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+    }, 1000);
+}
+
+function stopTimer() {
+    clearInterval(timerInterval);
+    document.getElementById('timerStop').style.display = 'none';
+    document.getElementById('timerStart').style.display = 'inline-block';
+    document.getElementById('timerReset').style.display = 'inline-block';
+    // Fill duration field with rounded minutes
+    const minutes = Math.max(1, Math.round(timerSeconds / 60));
+    document.getElementById('duration_minutes').value = minutes;
+    // Update fed_at to now
+    document.getElementById('fed_at').value = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+}
+
+function resetTimer() {
+    timerSeconds = 0;
+    document.getElementById('timerDisplay').textContent = '00:00';
+    document.getElementById('timerReset').style.display = 'none';
+    document.getElementById('timerHint').style.display = 'none';
+}
 </script>
 {% endblock %}
