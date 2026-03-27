@@ -1,12 +1,13 @@
 from flask import Flask, render_template, request, redirect, url_for, session, jsonify, flash
 from werkzeug.security import generate_password_hash, check_password_hash
 from functools import wraps
-from datetime import timedelta
+from datetime import timedelta, datetime
 import sqlite3
 import os
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-key-change-me")
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 DB_PATH = os.path.join(os.path.dirname(__file__), "baby_tracker.db")
 
 
@@ -34,6 +35,13 @@ def init_db():
             ounces REAL DEFAULT 0,
             notes TEXT,
             fed_at TIMESTAMP NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        );
+        CREATE TABLE IF NOT EXISTS telegram_links (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            telegram_id INTEGER UNIQUE NOT NULL,
+            user_id INTEGER NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (user_id) REFERENCES users(id)
         );
@@ -208,6 +216,173 @@ def chart_data():
         "ounces": [r["total_oz"] for r in rows],
     }
     return jsonify(data)
+
+
+## --- Telegram Bot Webhook --- ##
+
+import json
+import urllib.request
+
+
+def telegram_send(chat_id, text):
+    """Send a message via Telegram Bot API."""
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = json.dumps({"chat_id": chat_id, "text": text, "parse_mode": "HTML"}).encode()
+    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+    try:
+        urllib.request.urlopen(req)
+    except Exception:
+        pass
+
+
+def handle_telegram_message(chat_id, text):
+    """Process incoming Telegram messages."""
+    conn = get_db()
+    parts = text.strip().split()
+    command = parts[0].lower() if parts else ""
+
+    # /start usuario contraseña
+    if command == "/start":
+        if len(parts) < 3:
+            telegram_send(chat_id, (
+                "Para vincular tu cuenta escribe:\n"
+                "<code>/start usuario contraseña</code>\n\n"
+                "Después podrás registrar tomas con:\n"
+                "<code>/toma minutos onzas lado</code>\n\n"
+                "Lados: izquierdo, derecho, ambos, biberon\n\n"
+                "Ver resumen del día:\n"
+                "<code>/resumen</code>"
+            ))
+            conn.close()
+            return
+
+        username = parts[1]
+        password = parts[2]
+        user = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
+
+        if user and check_password_hash(user["password"], password):
+            conn.execute(
+                "INSERT OR REPLACE INTO telegram_links (telegram_id, user_id) VALUES (?, ?)",
+                (chat_id, user["id"]),
+            )
+            conn.commit()
+            telegram_send(chat_id, f"Vinculado a la cuenta de <b>{username}</b>. Ya puedes registrar tomas.")
+        else:
+            telegram_send(chat_id, "Usuario o contraseña incorrectos.")
+        conn.close()
+        return
+
+    # Check if user is linked
+    link = conn.execute("SELECT user_id FROM telegram_links WHERE telegram_id = ?", (chat_id,)).fetchone()
+    if not link:
+        telegram_send(chat_id, "Primero vincula tu cuenta con:\n<code>/start usuario contraseña</code>")
+        conn.close()
+        return
+
+    user_id = link["user_id"]
+
+    # /toma minutos onzas [lado] [nota...]
+    if command == "/toma":
+        if len(parts) < 3:
+            telegram_send(chat_id, "Formato:\n<code>/toma minutos onzas [lado] [nota]</code>\n\nEjemplo:\n<code>/toma 15 2.5 derecho buena succión</code>")
+            conn.close()
+            return
+
+        try:
+            duration = int(parts[1])
+            ounces = float(parts[2])
+        except ValueError:
+            telegram_send(chat_id, "Minutos debe ser un número entero y onzas un número.\n<code>/toma 15 2.5 derecho</code>")
+            conn.close()
+            return
+
+        valid_sides = ["izquierdo", "derecho", "ambos", "biberon"]
+        breast_side = parts[3].lower() if len(parts) > 3 and parts[3].lower() in valid_sides else "ambos"
+        notes_start = 4 if len(parts) > 3 and parts[3].lower() in valid_sides else 3
+        notes = " ".join(parts[notes_start:]) if len(parts) > notes_start else ""
+
+        fed_at = datetime.now().strftime("%Y-%m-%dT%H:%M")
+
+        conn.execute(
+            "INSERT INTO feedings (user_id, breast_side, duration_minutes, ounces, notes, fed_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (user_id, breast_side, duration, ounces, notes, fed_at),
+        )
+        conn.commit()
+
+        # Get today's summary
+        today = conn.execute(
+            """SELECT COUNT(*) as c, COALESCE(SUM(ounces),0) as oz, COALESCE(SUM(duration_minutes),0) as mins
+               FROM feedings WHERE user_id = ? AND date(fed_at) = date('now')""",
+            (user_id,),
+        ).fetchone()
+
+        telegram_send(chat_id, (
+            f"Toma registrada:\n"
+            f"  {duration} min | {ounces} oz | {breast_side}\n\n"
+            f"Resumen de hoy:\n"
+            f"  Tomas: {today['c']}\n"
+            f"  Onzas: {today['oz']}\n"
+            f"  Minutos: {today['mins']}"
+        ))
+        conn.close()
+        return
+
+    # /resumen
+    if command == "/resumen":
+        today = conn.execute(
+            """SELECT COUNT(*) as c, COALESCE(SUM(ounces),0) as oz, COALESCE(SUM(duration_minutes),0) as mins
+               FROM feedings WHERE user_id = ? AND date(fed_at) = date('now')""",
+            (user_id,),
+        ).fetchone()
+        total = conn.execute(
+            """SELECT COUNT(*) as c, COALESCE(SUM(ounces),0) as oz, COALESCE(SUM(duration_minutes),0) as mins
+               FROM feedings WHERE user_id = ?""",
+            (user_id,),
+        ).fetchone()
+
+        last = conn.execute(
+            "SELECT * FROM feedings WHERE user_id = ? ORDER BY fed_at DESC LIMIT 1",
+            (user_id,),
+        ).fetchone()
+        last_text = f"\nÚltima toma: {last['fed_at'][:16].replace('T', ' ')} — {last['duration_minutes']} min, {last['ounces']} oz, {last['breast_side']}" if last else ""
+
+        telegram_send(chat_id, (
+            f"<b>Resumen de hoy:</b>\n"
+            f"  Tomas: {today['c']}\n"
+            f"  Onzas: {today['oz']}\n"
+            f"  Minutos: {today['mins']}\n\n"
+            f"<b>Total general:</b>\n"
+            f"  Tomas: {total['c']}\n"
+            f"  Onzas: {total['oz']}\n"
+            f"  Minutos: {total['mins']}"
+            f"{last_text}"
+        ))
+        conn.close()
+        return
+
+    telegram_send(chat_id, (
+        "Comandos disponibles:\n"
+        "<code>/toma minutos onzas [lado] [nota]</code>\n"
+        "<code>/resumen</code>\n"
+        "<code>/start usuario contraseña</code>"
+    ))
+    conn.close()
+
+
+@app.route(f"/webhook/telegram", methods=["POST"])
+def telegram_webhook():
+    data = request.get_json(silent=True)
+    if not data or "message" not in data:
+        return jsonify({"ok": True})
+
+    message = data["message"]
+    chat_id = message["chat"]["id"]
+    text = message.get("text", "")
+
+    if text:
+        handle_telegram_message(chat_id, text)
+
+    return jsonify({"ok": True})
 
 
 init_db()
